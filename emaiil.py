@@ -22,7 +22,9 @@ class AgentState(TypedDict):
     subject: str
     prompt: str
     message: str
+    final_message: str
     status: str
+    
 
 
 
@@ -58,13 +60,88 @@ Subject: <subject here>
         "message": body.strip()
     }
 
+def checks_email(state:AgentState) -> dict:
+    llm_first_message=state["message"]
+    promptt=f"""You are an Email Quality Assurance Agent.
+
+    here is the email drafts {llm_first_message}
+
+Your job is NOT to rewrite the email immediately.
+Your job is to evaluate the draft like a strict but smart reviewer.
+
+Analyze the email across these dimensions:
+
+1. CLARITY
+- Is the purpose obvious within the first 2–3 lines?
+- Is anything vague, confusing, or unnecessary?
+
+2. TONE & INTENT
+- Is the tone appropriate for the recipient (professional, polite, confident)?
+- Does it sound respectful without being submissive or awkward?
+
+3. STRUCTURE
+- Is there a clear opening, body, and closing?
+- Are paragraphs too long or messy?
+
+4. IMPACT
+- Does the email clearly state what action is expected from the recipient?
+- Would a busy person understand and respond quickly?
+
+5. RISK FLAGS
+- Any grammar or spelling issues?
+- Any lines that sound unprofessional, desperate, or careless?
+- Any ambiguity that could be misinterpreted?
+
+---
+
+### OUTPUT FORMAT (STRICT)
+
+Return a structured review in the following format:
+
+Email Verdict: PASS / NEEDS IMPROVEMENT / FAIL
+
+Strengths:
+- Bullet list (short, honest)
+
+Issues:
+- Bullet list (be direct, no sugarcoating)
+
+Suggested Improvements:
+- Bullet list of actionable suggestions (not a full rewrite)
+
+Rewrite Needed?: YES / NO
+
+If Rewrite Needed = YES:
+Briefly explain *why* a rewrite is necessary.
+
+---
+
+### IMPORTANT RULES
+- Do NOT rewrite the email unless explicitly asked.
+- Be concise but sharp.
+- Think like the recipient, not the sender.
+- Prioritize effectiveness over politeness.
+
+"""
+    response=model.invoke(promptt)
+    textt = response.content.strip()
+
+
+    subjectt, bodyy = textt.split("\n", 1)
+    subjectt = subjectt.replace("Subject:", "").strip()
+
+    return {
+        "subject": subjectt,
+        "final_message": bodyy.strip()
+    }
+
 def send_email(state: AgentState) -> dict:
     msg = MIMEMultipart()
     msg["From"] = state["from_mail"]
     msg["To"] = state["to_mail"]
     msg["Subject"] = state["subject"]
 
-    msg.attach(MIMEText(state["message"], "plain"))
+    msg.attach(MIMEText(state["final_message"], "plain"))
 
     try:
         server = smtplib.SMTP(os.getenv("SMTP_HOST"), int(os.getenv("SMTP_PORT")))
@@ -81,10 +158,12 @@ def send_email(state: AgentState) -> dict:
 graph = StateGraph(AgentState)
 
 graph.add_node("write_email", write_email)
+graph.add_node("checking_email", checks_email)
 graph.add_node("send_email", send_email)
 
 graph.add_edge(START, "write_email")
-graph.add_edge("write_email", "send_email")
+graph.add_edge("write_email", "checking_email")
+graph.add_edge("checking_email","send_email")
 graph.add_edge("send_email", END)
 
 app = graph.compile()
